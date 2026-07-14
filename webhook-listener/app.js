@@ -5,6 +5,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '127.0.0.1';
 const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
+const DEBUG_FULL_DIFF = process.env.DEBUG_FULL_DIFF === 'true';
 
 // orderId -> { order_name, payloads: [previous?, current] }
 const orderStore = new Map();
@@ -78,6 +79,42 @@ function collectFulfillmentChanges(prevPayload, currPayload, changes) {
   }
 }
 
+function collectFullPayloadChanges(previous, current, changes, path = '') {
+  const prevVal = normalizeValue(previous);
+  const currVal = normalizeValue(current);
+
+  if (JSON.stringify(prevVal) === JSON.stringify(currVal)) {
+    return;
+  }
+
+  const prevIsObj = prevVal && typeof prevVal === 'object';
+  const currIsObj = currVal && typeof currVal === 'object';
+
+  if (prevIsObj && currIsObj && !Array.isArray(prevVal) && !Array.isArray(currVal)) {
+    const keys = new Set([...Object.keys(prevVal), ...Object.keys(currVal)]);
+    for (const key of keys) {
+      const nextPath = path ? `${path}.${key}` : key;
+      collectFullPayloadChanges(prevVal[key], currVal[key], changes, nextPath);
+    }
+    return;
+  }
+
+  if (prevIsObj && currIsObj && Array.isArray(prevVal) && Array.isArray(currVal)) {
+    const maxLength = Math.max(prevVal.length, currVal.length);
+    for (let i = 0; i < maxLength; i += 1) {
+      const nextPath = `${path}[${i}]`;
+      collectFullPayloadChanges(prevVal[i], currVal[i], changes, nextPath);
+    }
+    return;
+  }
+
+  changes.push({
+    key: path || '(root)',
+    previous: prevVal,
+    current: currVal,
+  });
+}
+
 function diffOrderPayloads(previous, current) {
   if (!previous || !current) {
     return {
@@ -109,7 +146,39 @@ function diffOrderPayloads(previous, current) {
     getByPath(current, 'shipping_address'),
   );
 
+  addChange(changes, 'line_items', getByPath(previous, 'line_items'), getByPath(current, 'line_items'));
+  addChange(
+    changes,
+    'shipping_lines',
+    getByPath(previous, 'shipping_lines'),
+    getByPath(current, 'shipping_lines'),
+  );
+  addChange(
+    changes,
+    'discount_codes',
+    getByPath(previous, 'discount_codes'),
+    getByPath(current, 'discount_codes'),
+  );
+  addChange(
+    changes,
+    'transactions',
+    getByPath(previous, 'transactions'),
+    getByPath(current, 'transactions'),
+  );
+  addChange(changes, 'refunds', getByPath(previous, 'refunds'), getByPath(current, 'refunds'));
+  addChange(changes, 'customer', getByPath(previous, 'customer'), getByPath(current, 'customer'));
+
   collectFulfillmentChanges(previous, current, changes);
+
+  if (DEBUG_FULL_DIFF) {
+    const fullChanges = [];
+    collectFullPayloadChanges(previous, current, fullChanges);
+    for (const item of fullChanges) {
+      if (!changes.some((c) => c.key === item.key)) {
+        changes.push(item);
+      }
+    }
+  }
 
   return {
     changed: changes.length > 0,

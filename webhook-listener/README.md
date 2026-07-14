@@ -29,6 +29,8 @@ cp webhook-listener/.env.example webhook-listener/.env
 PORT=3000 SHOPIFY_WEBHOOK_SECRET=your_secret node webhook-listener/app.js
 # if needed in restricted environments:
 HOST=127.0.0.1 PORT=3000 SHOPIFY_WEBHOOK_SECRET=your_secret node webhook-listener/app.js
+# optional debug mode to diff full payload:
+DEBUG_FULL_DIFF=true HOST=127.0.0.1 PORT=3000 SHOPIFY_WEBHOOK_SECRET=your_secret node webhook-listener/app.js
 ```
 
 Open dashboard at: `http://localhost:3000/`
@@ -144,9 +146,16 @@ docker run --rm -p 3000:3000 --env HOST=0.0.0.0 --env PORT=3000 --env SHOPIFY_WE
 - `fulfillments[].tracking_url`
 - `fulfillments[].updated_at`
 - `shipping_address` (full object)
+- `line_items`
+- `shipping_lines`
+- `discount_codes`
+- `transactions`
+- `refunds`
+- `customer`
 
 ## Important behavior
 
 - Storage is strictly in memory only (no database, no file writes).
 - The app keeps only the last two payloads per order.
 - The global diff log is capped at 200 entries.
+- Set `DEBUG_FULL_DIFF=true` to include full payload-level differences for deep troubleshooting.
