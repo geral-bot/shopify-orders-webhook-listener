@@ -1,0 +1,16 @@
+[Unit]
+Description=Shopify Orders Updated Webhook Listener
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/webhook-listener
+EnvironmentFile=/opt/webhook-listener/.env
+ExecStart=/usr/bin/node /opt/webhook-listener/app.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: shopify-orders-updated-webhook-listener
+    env: node
+    rootDir: webhook-listener
+    plan: free
+    buildCommand: npm install
+    startCommand: node app.js
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 10000
+      - key: SHOPIFY_WEBHOOK_SECRET
+        sync: false
