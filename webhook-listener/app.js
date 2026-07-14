@@ -214,7 +214,13 @@ function verifyShopifyHmac(rawBody, hmacHeader, secret) {
 function renderDashboard(entries) {
   const rows = entries
     .map((entry, idx) => {
-      const detailsRows =
+      const metadataRows = `
+        <tr><td>_meta.topic</td><td>-</td><td>${safeStringify(entry.topic)}</td></tr>
+        <tr><td>_meta.webhook_id</td><td>-</td><td>${safeStringify(entry.webhook_id)}</td></tr>
+        <tr><td>_meta.triggered_at</td><td>-</td><td>${safeStringify(entry.triggered_at)}</td></tr>
+      `;
+
+      const changeRows =
         entry.diff.changes.length === 0
           ? '<tr><td colspan="3">Ghost update — no visible changes</td></tr>'
           : entry.diff.changes
@@ -223,6 +229,7 @@ function renderDashboard(entries) {
                   `<tr><td>${c.key}</td><td>${safeStringify(c.previous)}</td><td>${safeStringify(c.current)}</td></tr>`,
               )
               .join('');
+      const detailsRows = `${metadataRows}${changeRows}`;
 
       return `
         <tr class="summary" data-target="details-${idx}">
@@ -295,6 +302,9 @@ app.get('/', (_req, res) => {
 app.post('/webhook/orders-updated', express.raw({ type: 'application/json' }), (req, res) => {
   const rawBody = req.body;
   const hmacHeader = req.get('X-Shopify-Hmac-Sha256');
+  const topicHeader = req.get('X-Shopify-Topic') || '';
+  const webhookIdHeader = req.get('X-Shopify-Webhook-Id') || '';
+  const triggeredAtHeader = req.get('X-Shopify-Triggered-At') || '';
 
   if (!Buffer.isBuffer(rawBody)) {
     res.status(401).send('Invalid body');
@@ -335,6 +345,9 @@ app.post('/webhook/orders-updated', express.raw({ type: 'application/json' }), (
       order_id: orderId,
       order_name: orderName,
       received_at: receivedAt,
+      topic: topicHeader,
+      webhook_id: webhookIdHeader,
+      triggered_at: triggeredAtHeader,
       diff,
     });
   }
