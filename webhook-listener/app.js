@@ -13,6 +13,9 @@ const orderStore = new Map();
 // Circular buffer (max 200 entries)
 const DIFF_LOG_MAX = 200;
 const diffLog = [];
+const WEBHOOK_ID_MAX = 500;
+const recentWebhookIds = [];
+const recentWebhookIdSet = new Set();
 
 function safeStringify(value) {
   if (value === undefined) return 'undefined';
@@ -197,6 +200,31 @@ function pushDiffLog(entry) {
   }
 }
 
+function markWebhookIdSeen(webhookId) {
+  if (!webhookId) return false;
+  const alreadySeen = recentWebhookIdSet.has(webhookId);
+  if (alreadySeen) return true;
+  recentWebhookIds.push(webhookId);
+  recentWebhookIdSet.add(webhookId);
+  if (recentWebhookIds.length > WEBHOOK_ID_MAX) {
+    const evicted = recentWebhookIds.shift();
+    if (evicted) recentWebhookIdSet.delete(evicted);
+  }
+  return false;
+}
+
+function classifyUpdate(diff, metadata) {
+  const keys = diff?.changes?.map((c) => c.key) || [];
+  const onlyUpdatedAt = keys.length === 1 && keys[0] === 'updated_at';
+  const noVisibleChanges = keys.length === 0;
+
+  if (metadata.is_test) return 'test_webhook';
+  if (metadata.duplicate_delivery) return 'duplicate_delivery';
+  if (noVisibleChanges) return 'ghost_system_touch';
+  if (onlyUpdatedAt) return 'timestamp_only_touch';
+  return 'business_change';
+}
+
 function verifyShopifyHmac(rawBody, hmacHeader, secret) {
   if (!hmacHeader || !secret) return false;
   const digest = crypto
@@ -218,6 +246,13 @@ function renderDashboard(entries) {
         <tr><td>_meta.topic</td><td>-</td><td>${safeStringify(entry.topic)}</td></tr>
         <tr><td>_meta.webhook_id</td><td>-</td><td>${safeStringify(entry.webhook_id)}</td></tr>
         <tr><td>_meta.triggered_at</td><td>-</td><td>${safeStringify(entry.triggered_at)}</td></tr>
+        <tr><td>_meta.shop_domain</td><td>-</td><td>${safeStringify(entry.shop_domain)}</td></tr>
+        <tr><td>_meta.api_version</td><td>-</td><td>${safeStringify(entry.api_version)}</td></tr>
+        <tr><td>_meta.request_id</td><td>-</td><td>${safeStringify(entry.request_id)}</td></tr>
+        <tr><td>_meta.user_agent</td><td>-</td><td>${safeStringify(entry.user_agent)}</td></tr>
+        <tr><td>_meta.remote_ip</td><td>-</td><td>${safeStringify(entry.remote_ip)}</td></tr>
+        <tr><td>_meta.payload_sha256</td><td>-</td><td>${safeStringify(entry.payload_sha256)}</td></tr>
+        <tr><td>_meta.classification</td><td>-</td><td>${safeStringify(entry.classification)}</td></tr>
       `;
 
       const changeRows =
@@ -299,12 +334,48 @@ app.get('/', (_req, res) => {
   res.status(200).type('html').send(renderDashboard(newestFirst));
 });
 
+app.get('/api/diff-log', (req, res) => {
+  const { order_id: orderIdFilter } = req.query;
+  const newestFirst = [...diffLog].reverse();
+  const filtered = orderIdFilter
+    ? newestFirst.filter((entry) => String(entry.order_id) === String(orderIdFilter))
+    : newestFirst;
+  res.status(200).json({
+    count: filtered.length,
+    entries: filtered,
+  });
+});
+
+app.get('/api/ghost-updates', (req, res) => {
+  const { order_id: orderIdFilter } = req.query;
+  const newestFirst = [...diffLog].reverse();
+  const ghostEntries = newestFirst.filter((entry) => {
+    const noVisibleChanges = entry?.diff?.changes?.length === 0;
+    const onlyUpdatedAt =
+      entry?.diff?.changes?.length === 1 && entry?.diff?.changes?.[0]?.key === 'updated_at';
+    const matchesOrder = orderIdFilter
+      ? String(entry.order_id) === String(orderIdFilter)
+      : true;
+    return matchesOrder && (noVisibleChanges || onlyUpdatedAt);
+  });
+  res.status(200).json({
+    count: ghostEntries.length,
+    entries: ghostEntries,
+  });
+});
+
 app.post('/webhook/orders-updated', express.raw({ type: 'application/json' }), (req, res) => {
   const rawBody = req.body;
   const hmacHeader = req.get('X-Shopify-Hmac-Sha256');
   const topicHeader = req.get('X-Shopify-Topic') || '';
   const webhookIdHeader = req.get('X-Shopify-Webhook-Id') || '';
   const triggeredAtHeader = req.get('X-Shopify-Triggered-At') || '';
+  const shopDomainHeader = req.get('X-Shopify-Shop-Domain') || '';
+  const apiVersionHeader = req.get('X-Shopify-Api-Version') || '';
+  const isTestHeader = req.get('X-Shopify-Test') || '';
+  const requestIdHeader = req.get('X-Request-Id') || req.get('x-request-id') || '';
+  const remoteIp = req.ip || req.socket?.remoteAddress || '';
+  const userAgent = req.get('User-Agent') || '';
 
   if (!Buffer.isBuffer(rawBody)) {
     res.status(401).send('Invalid body');
@@ -329,6 +400,8 @@ app.post('/webhook/orders-updated', express.raw({ type: 'application/json' }), (
   const orderId = payload?.id;
   const orderName = payload?.name || '';
   const receivedAt = new Date().toISOString();
+  const payloadSha256 = crypto.createHash('sha256').update(rawBody).digest('hex');
+  const duplicateDelivery = markWebhookIdSeen(webhookIdHeader);
 
   if (orderId !== undefined && orderId !== null) {
     const existing = orderStore.get(orderId);
@@ -341,6 +414,10 @@ app.post('/webhook/orders-updated', express.raw({ type: 'application/json' }), (
     });
 
     const diff = diffOrderPayloads(previous, payload);
+    const classification = classifyUpdate(diff, {
+      is_test: isTestHeader === 'true',
+      duplicate_delivery: duplicateDelivery,
+    });
     pushDiffLog({
       order_id: orderId,
       order_name: orderName,
@@ -348,6 +425,15 @@ app.post('/webhook/orders-updated', express.raw({ type: 'application/json' }), (
       topic: topicHeader,
       webhook_id: webhookIdHeader,
       triggered_at: triggeredAtHeader,
+      shop_domain: shopDomainHeader,
+      api_version: apiVersionHeader,
+      request_id: requestIdHeader,
+      user_agent: userAgent,
+      remote_ip: remoteIp,
+      payload_sha256: payloadSha256,
+      is_test: isTestHeader === 'true',
+      duplicate_delivery: duplicateDelivery,
+      classification,
       diff,
     });
   }

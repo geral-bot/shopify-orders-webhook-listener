@@ -17,6 +17,12 @@ Standalone Node.js + Express listener that receives `orders/updated` webhooks, v
   - Shows newest diff entries first
   - Expand row to view full key/value diff table (`previous -> new`)
   - Shows `Ghost update — no visible changes` when nothing changed
+- `GET /api/diff-log`
+  - JSON log (newest first)
+  - Optional filter: `?order_id=<id>`
+- `GET /api/ghost-updates`
+  - JSON with only ghost/timestamp-only updates
+  - Optional filter: `?order_id=<id>`
 
 ## 1. Run locally
 
@@ -34,6 +40,10 @@ DEBUG_FULL_DIFF=true HOST=127.0.0.1 PORT=3000 SHOPIFY_WEBHOOK_SECRET=your_secret
 ```
 
 Open dashboard at: `http://localhost:3000/`
+API diagnostics:
+
+- `http://localhost:3000/api/diff-log`
+- `http://localhost:3000/api/ghost-updates`
 
 ## 2. Install as systemd service
 
@@ -159,3 +169,7 @@ docker run --rm -p 3000:3000 --env HOST=0.0.0.0 --env PORT=3000 --env SHOPIFY_WE
 - The app keeps only the last two payloads per order.
 - The global diff log is capped at 200 entries.
 - Set `DEBUG_FULL_DIFF=true` to include full payload-level differences for deep troubleshooting.
+- Each webhook entry also stores metadata to help identify the source of updates:
+  - `topic`, `webhook_id`, `triggered_at`, `shop_domain`, `api_version`
+  - `request_id`, `user_agent`, `remote_ip`, `payload_sha256`
+  - `classification` (`business_change`, `timestamp_only_touch`, `ghost_system_touch`, `duplicate_delivery`, `test_webhook`)
